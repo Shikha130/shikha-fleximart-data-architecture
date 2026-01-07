@@ -1,0 +1,157 @@
+import pandas as pd
+import mysql.connector
+
+# -----------------------------
+# DATABASE CONNECTION
+# -----------------------------
+conn = mysql.connector.connect(
+    host="localhost",
+    user="root",
+    password="Shikharani123@",   
+    database="fleximart"
+)
+cursor = conn.cursor()
+
+# -----------------------------
+# DATA QUALITY REPORT
+# -----------------------------
+report = []
+
+# -----------------------------
+# HELPER FUNCTIONS
+# -----------------------------
+def standardize_phone(phone):
+    if pd.isna(phone):
+        return None
+    digits = ''.join(filter(str.isdigit, str(phone)))
+    return "+91-" + digits[-10:]
+
+def clean_date(date):
+    try:
+        return pd.to_datetime(date).date()
+    except:
+        return None
+
+def standardize_category(cat):
+    if pd.isna(cat):
+        return None
+    return cat.strip().capitalize()
+
+# -----------------------------
+# CUSTOMERS ETL
+# -----------------------------
+customers = pd.read_csv("customers_raw.csv")
+initial = len(customers)
+
+customers = customers.drop_duplicates()
+customers = customers.dropna(subset=["email"])
+
+customers["phone"] = customers["phone"].apply(standardize_phone)
+customers["registration_date"] = customers["registration_date"].apply(clean_date)
+
+loaded = 0
+for _, row in customers.iterrows():
+    try:
+        cursor.execute("""
+            INSERT INTO customers (first_name, last_name, email, phone, city, registration_date)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (
+            row["first_name"],
+            row["last_name"],
+            row["email"],
+            row["phone"],
+            row["city"],
+            row["registration_date"]
+        ))
+        loaded += 1
+    except:
+        pass
+
+report.append(f"Customers processed: {initial}, loaded: {loaded}")
+
+# -----------------------------
+# PRODUCTS ETL
+# -----------------------------
+products = pd.read_csv("products_raw.csv")
+initial = len(products)
+
+products["price"].fillna(products["price"].mean(), inplace=True)
+products["stock_quantity"].fillna(0, inplace=True)
+products["category"] = products["category"].apply(standardize_category)
+
+loaded = 0
+for _, row in products.iterrows():
+    try:
+        cursor.execute("""
+            INSERT INTO products (product_name, category, price, stock_quantity)
+            VALUES (%s, %s, %s, %s)
+        """, (
+            row["product_name"].strip(),
+            row["category"],
+            row["price"],
+            int(row["stock_quantity"])
+        ))
+        loaded += 1
+    except:
+        pass
+
+report.append(f"Products processed: {initial}, loaded: {loaded}")
+
+# -----------------------------
+# SALES ETL
+# -----------------------------
+sales = pd.read_csv("sales_raw.csv")
+initial = len(sales)
+
+sales = sales.drop_duplicates()
+sales = sales.dropna(subset=["customer_id", "product_id"])
+sales["transaction_date"] = sales["transaction_date"].apply(clean_date)
+
+loaded = 0
+for _, row in sales.iterrows():
+    try:
+        total_amount = row["quantity"] * row["unit_price"]
+
+        cursor.execute("""
+            INSERT INTO orders (customer_id, order_date, total_amount, status)
+            VALUES (%s, %s, %s, %s)
+        """, (
+            int(row["customer_id"][1:]),
+            row["transaction_date"],
+            total_amount,
+            row["status"]
+        ))
+
+        order_id = cursor.lastrowid
+
+        cursor.execute("""
+            INSERT INTO order_items (order_id, product_id, quantity, unit_price, subtotal)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (
+            order_id,
+            int(row["product_id"][1:]),
+            row["quantity"],
+            row["unit_price"],
+            total_amount
+        ))
+
+        loaded += 1
+    except:
+        pass
+
+report.append(f"Sales processed: {initial}, loaded: {loaded}")
+
+conn.commit()
+
+# -----------------------------
+# WRITE DATA QUALITY REPORT
+# -----------------------------
+with open("data_quality_report.txt", "w") as f:
+    for line in report:
+        f.write(line + "\n")
+
+cursor.close()
+conn.close()
+
+print("ETL Pipeline completed successfully!")
+
