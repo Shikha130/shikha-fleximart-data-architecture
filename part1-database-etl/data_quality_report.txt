@@ -1,0 +1,3 @@
+Customers processed: 26, loaded: 0
+Products processed: 20, loaded: 20
+Sales processed: 41, loaded: 34
